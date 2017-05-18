@@ -78,68 +78,92 @@ def cli(**args):
 
         echo(getattr(imported[req], requirements[req]))
 
-    if args['ssl_no_verify']:
-        imported['dcos'].config.set_val('core.ssl_verify', 'False')
-
     echo('Checking for DC/OS cluster...', d='step-min', n=False)
 
-    with stdchannel_redirected(sys.stderr, os.devnull):
-        imported['dcos'].config.set_val('core.dcos_url', args['dcos_url'])
+    attached = False
 
     try:
-        echo(shakedown.dcos_version())
-    except:
-        click.secho("error: cluster '" + args['dcos_url'] + "' is unreachable.", fg='red', bold=True)
-        sys.exit(1)
+        if args['dcos_url'] == imported['dcos'].config.get_config_val('core.dcos_url'):
+            try:
+                echo(shakedown.dcos_version())
+                attached = True
+            except imported['dcos'].errors.DCOSException:
+                attached = False
+    except imported['dcos'].errors.DCOSException:
+        attached = False
 
-    echo('Authenticating with cluster...', d='step-maj')
-    authenticated = False
-    token = imported['dcos'].config.get_config_val("core.dcos_acs_token")
-    if token is not None:
-        echo('Validating existing ACS token...', d='step-min', n=False)
-        try:
-            shakedown.dcos_leader()
+    if not attached:
+        from dcos import cluster
 
-            echo('ok')
-            authenticated = True
-        except imported['dcos'].errors.DCOSException:
-            click.secho("error: authentication failed.", fg='red', bold=True)
-    if not authenticated and args['oauth_token']:
-       try:
-            echo('Validating OAuth token...', d='step-min', n=False)
-            token = shakedown.authenticate_oauth(args['oauth_token'])
+        clusters = [c.dict() for c in cluster.get_clusters()]
+        for c in clusters:
+            if args['dcos_url'] == c['url']:
+                try:
+                    cluster.set_attached(cluster.get_cluster(c['name']).get_cluster_path())
+                    echo(shakedown.dcos_version())
+                    attached = True
+                    break
+                except:
+                    attached = False
 
-            with stdchannel_redirected(sys.stderr, os.devnull):
-                imported['dcos'].config.set_val('core.dcos_acs_token', token)
+    if not attached:
+        echo('cluster not found')
+        echo('Setting up DC/OS cluster...', d='step-min')
 
-            authenticated = True
-            echo('ok')
-       except:
-            click.secho("error: authentication failed.", fg='red', bold=True)
-    if not authenticated and args['username'] and args['password']:
-        try:
-            echo('Validating username and password...', d='step-min', n=False)
-            token = shakedown.authenticate(args['username'], args['password'])
+        with cluster.setup_directory() as temp_path:
+            cluster.set_attached(temp_path)
 
-            with stdchannel_redirected(sys.stderr, os.devnull):
-                imported['dcos'].config.set_val('core.dcos_acs_token', token)
+            imported['dcos'].config.set_val('core.dcos_url', args['dcos_url'])
+            if args['ssl_no_verify']:
+                imported['dcos'].config.set_val('core.ssl_verify', 'False')
 
-            authenticated = True
-            echo('ok')
-        except:
-            click.secho("error: authentication failed.", fg='red', bold=True)
-    if not authenticated:
-        # test to see if auth isn't necessary (like for vagrant dcos)
-        try:
-            shakedown.dcos_leader()
+            try:
+                cluster.setup_cluster_config(args['dcos_url'], temp_path, False)
+            except:
+                authenticated = False
+                token = imported['dcos'].config.get_config_val("core.dcos_acs_token")
+                if token is not None:
+                    echo('trying existing ACS token...', d='step-min', n=False)
+                    try:
+                        shakedown.dcos_leader()
 
-            echo('ok')
-            authenticated = True
-        except imported['dcos'].errors.DCOSException:
-            click.secho("error: authentication failed.", fg='red', bold=True)
-    if not authenticated:
-        click.secho("error: no authentication credentials or token found.", fg='red', bold=True)
-        sys.exit(1)
+                        authenticated = True
+                        echo(fchr('PP'), d='pass')
+                    except imported['dcos'].errors.DCOSException:
+                        echo(fchr('FF'), d='fail')
+                if not authenticated and args['oauth_token']:
+                    try:
+                        echo('trying OAuth token...', d='item-maj', n=False)
+                        token = shakedown.authenticate_oauth(args['oauth_token'])
+
+                        with stdchannel_redirected(sys.stderr, os.devnull):
+                            imported['dcos'].config.set_val('core.dcos_acs_token', token)
+
+                        authenticated = True
+                        echo(fchr('PP'), d='pass')
+                    except:
+                       echo(fchr('FF'), d='fail')
+                if not authenticated and args['username'] and args['password']:
+                    try:
+                        echo('trying username and password...', d='item-maj', n=False)
+                        token = shakedown.authenticate(args['username'], args['password'])
+
+                        with stdchannel_redirected(sys.stderr, os.devnull):
+                            imported['dcos'].config.set_val('core.dcos_acs_token', token)
+
+                        authenticated = True
+                        echo(fchr('PP'), d='pass')
+                    except:
+                        echo(fchr('FF'), d='fail')
+
+                if authenticated:
+                    cluster.setup_cluster_config(args['dcos_url'], temp_path, False)
+
+                    echo('Checking for DC/OS cluster...', d='step-min', n=False)
+                    echo(shakedown.dcos_version())
+                else:
+                    click.secho("error: no authentication credentials or token found.", fg='red', bold=True)
+                    sys.exit(1)
 
     class shakedown:
         """ This encapsulates a PyTest wrapper plugin
