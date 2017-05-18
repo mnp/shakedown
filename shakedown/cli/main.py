@@ -42,11 +42,11 @@ def cli(**args):
         shakedown.cli.quiet = True
 
     if not args['dcos_url']:
-        args['dcos_url'] = dcos_url()
-
-    if not args['dcos_url']:
-        click.secho('error: --dcos-url is a required option; see --help for more information.', fg='red', bold=True)
-        sys.exit(1)
+        try:
+            args['dcos_url'] = dcos_url()
+        except:
+            click.secho('error: cluster URL not set, use --dcos-url or see --help for more information.', fg='red', bold=True)
+            sys.exit(1)
 
     if args['ssh_key_file']:
         shakedown.cli.ssh_key_file = args['ssh_key_file']
